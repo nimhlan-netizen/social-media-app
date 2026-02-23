@@ -1,3 +1,14 @@
+"""Postiz API client for uploading and scheduling social media video posts.
+
+Uses the Postiz self-hosted Public API (base: https://postiz.almostrolledit.com).
+
+Posting flow:
+    1. upload_media()    — POST /api/public/v1/upload (multipart)
+    2. find_next_slot()  — GET  /api/public/v1/find-slot/?integrationId=<id>
+    3. create_post()     — POST /api/public/v1/posts (JSON, type="schedule")
+
+Authentication: Authorization header = raw API key (no Bearer prefix).
+"""
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
