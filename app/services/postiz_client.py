@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Optional
 
 import httpx
 from app.config import settings
@@ -12,7 +11,7 @@ class PostizClient:
     def __init__(self):
         self.base_url = settings.postiz_api_url.rstrip("/")
         self.headers = {
-            "Authorization": f"Bearer {settings.postiz_api_key}",
+            "Authorization": settings.postiz_api_key,
             "Accept": "application/json",
         }
 
@@ -28,15 +27,16 @@ class PostizClient:
                 ids.append(id_.strip())
         return ids
 
-    def upload_media(self, file_path: str) -> str:
-        """Upload a video file to Postiz media library. Returns media ID."""
+    def upload_media(self, file_path: str) -> dict:
+        """Upload a video file to Postiz. Returns dict with id and path."""
         path = Path(file_path)
-        url = f"{self.base_url}/api/media"
+        url = f"{self.base_url}/public/v1/upload"
 
-        with httpx.Client(headers=self.headers, timeout=120) as client:
+        with httpx.Client(timeout=300) as client:
             with open(file_path, "rb") as f:
                 response = client.post(
                     url,
+                    headers=self.headers,
                     files={"file": (path.name, f, "video/mp4")},
                 )
 
@@ -47,15 +47,16 @@ class PostizClient:
 
         data = response.json()
         media_id = data.get("id") or data.get("mediaId") or data.get("data", {}).get("id")
+        media_path = data.get("path") or data.get("url") or data.get("data", {}).get("path", "")
         if not media_id:
             raise RuntimeError(f"Postiz upload response missing media ID: {data}")
 
         logger.info(f"Media uploaded to Postiz: {media_id}")
-        return str(media_id)
+        return {"id": str(media_id), "path": str(media_path)}
 
     def create_post(
         self,
-        media_id: str,
+        media: dict,
         caption: str,
         hashtags: list[str],
     ) -> str:
@@ -71,28 +72,27 @@ class PostizClient:
         hashtag_str = " ".join(f"#{tag}" for tag in hashtags)
         full_caption = f"{caption}\n\n{hashtag_str}".strip()
 
-        url = f"{self.base_url}/api/posts"
+        url = f"{self.base_url}/public/v1/posts"
         payload = {
             "type": "now",
+            "shortLink": False,
+            "tags": [],
             "posts": [
                 {
-                    "integrationId": integration_id,
+                    "integration": {"id": integration_id},
                     "value": [
                         {
                             "content": full_caption,
-                            "media": [{"id": media_id}],
+                            "image": [media],
                         }
                     ],
-                    "settings": {
-                        "comments": False,
-                    },
                 }
                 for integration_id in integration_ids
             ],
         }
 
-        with httpx.Client(headers=self.headers, timeout=60) as client:
-            response = client.post(url, json=payload)
+        with httpx.Client(timeout=60) as client:
+            response = client.post(url, headers={**self.headers, "Content-Type": "application/json"}, json=payload)
 
         if response.status_code not in (200, 201):
             raise RuntimeError(
@@ -115,5 +115,5 @@ class PostizClient:
         hashtags: list[str],
     ) -> str:
         """Full flow: upload media + create post. Returns post ID."""
-        media_id = self.upload_media(file_path)
-        return self.create_post(media_id, caption, hashtags)
+        media = self.upload_media(file_path)
+        return self.create_post(media, caption, hashtags)
