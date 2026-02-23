@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from pathlib import Path
@@ -15,9 +16,15 @@ SUPPORTED_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def _get_drive_service():
-    creds = service_account.Credentials.from_service_account_file(
-        settings.google_service_account_json, scopes=SCOPES
-    )
+    # Prefer inline JSON content (set as env var in Coolify/Docker)
+    if settings.google_service_account_json_content:
+        info = json.loads(settings.google_service_account_json_content)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        # Fall back to file path (local development)
+        creds = service_account.Credentials.from_service_account_file(
+            settings.google_service_account_json, scopes=SCOPES
+        )
     return build("drive", "v3", credentials=creds)
 
 

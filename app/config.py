@@ -7,7 +7,8 @@ class Settings(BaseSettings):
 
     # Google Drive
     google_drive_folder_id: str
-    google_service_account_json: str = "service_account.json"
+    google_service_account_json: str = "service_account.json"  # file path (local dev)
+    google_service_account_json_content: str = ""  # raw JSON string (Coolify/Docker env var)
 
     # Gemini
     gemini_api_key: str
