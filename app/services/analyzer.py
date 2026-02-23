@@ -1,4 +1,17 @@
-import json
+"""Gemini video analysis service.
+
+Uploads the downloaded video to Gemini Files API (required for video input),
+then prompts Gemini to return a structured JSON AnalysisResult containing:
+  - trim_start_sec / trim_end_sec  — ideal clip window
+  - hook_text                      — punchy all-caps overlay text for the first 3s
+  - caption_style                  — "bold" | "minimal"
+  - transcript                     — word-level timestamps [{start, end, text}, ...]
+  - suggested_caption              — social media caption (no hashtags)
+  - hashtags                       — list of relevant tags (no # prefix)
+  - raw_duration_sec               — total video duration
+
+The uploaded file is deleted from Gemini after analysis to avoid storage buildup.
+"""
 import logging
 import time
 from dataclasses import dataclass

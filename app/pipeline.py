@@ -1,3 +1,14 @@
+"""Pipeline orchestrator for the Social Media Video Pipeline.
+
+This module is the main entry point called by the APScheduler every `POLL_INTERVAL_SECONDS`.
+For each new file found in Google Drive, it runs the full processing chain:
+
+    download → analyze (Gemini) → generate captions (SRT) → edit (FFmpeg) → post (Postiz)
+
+Each step updates the VideoJob.status in SQLite so progress is always visible via /jobs.
+On any exception the job is marked `failed` with the error message stored for debugging.
+Failed jobs can be retried via the /jobs/{id}/retry API endpoint.
+"""
 import logging
 from pathlib import Path
 

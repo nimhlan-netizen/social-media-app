@@ -4,7 +4,7 @@
 
 A self-contained Python service that:
 1. **Watches** a specific Google Drive folder for new short-form video clips (9:16 MP4/MOV)
-2. **Analyzes** each clip with Gemini 1.5 Flash (transcript, trim points, hook text, caption style)
+2. **Analyzes** each clip with Gemini 2.0 Flash (transcript, trim points, hook text, caption style)
 3. **Edits** the clip with FFmpeg (trim + burned-in subtitles + text hook overlay)
 4. **Posts** the edited clip to Instagram, Facebook, and YouTube via Postiz API
 
@@ -21,7 +21,7 @@ Google Drive Folder
        ↓
   FFmpeg Editor  →  edited .mp4
        ↓
-  Postiz Client  →  Instagram / Facebook / YouTube
+  Postiz Client  →  upload media → find-slot → schedule post
        ↓
   SQLite (VideoJob status tracking)
 ```
@@ -35,7 +35,7 @@ Google Drive Folder
 | `app/models.py` | SQLite schema (VideoJob) |
 | `app/pipeline.py` | Main orchestrator (download→analyze→edit→post) |
 | `app/services/drive_watcher.py` | Google Drive API polling |
-| `app/services/analyzer.py` | Gemini 1.5 Flash video analysis |
+| `app/services/analyzer.py` | Gemini video analysis |
 | `app/services/caption_generator.py` | Transcript → SRT conversion |
 | `app/services/editor.py` | FFmpeg editing pipeline |
 | `app/services/postiz_client.py` | Postiz REST API client |
@@ -47,10 +47,14 @@ All secrets live in `.env` (never committed). See `.env.example` for the full li
 
 Required:
 - `GOOGLE_DRIVE_FOLDER_ID` — ID from Drive folder URL
-- `GOOGLE_SERVICE_ACCOUNT_JSON` — Path to service account key JSON
+- `GOOGLE_SERVICE_ACCOUNT_JSON` — Path to service account key JSON (mounted as file in Docker)
 - `GEMINI_API_KEY` — Google AI Studio API key
+- `GEMINI_MODEL` — Model name, currently `gemini-2.0-flash`
 - `POSTIZ_API_URL` — https://postiz.almostrolledit.com
-- `POSTIZ_API_KEY` — From Postiz settings panel
+- `POSTIZ_API_KEY` — From Postiz Settings → Public API
+- `POSTIZ_INSTAGRAM_INTEGRATION_ID` — From Postiz Settings → Integrations
+- `POSTIZ_FACEBOOK_INTEGRATION_ID` — From Postiz Settings → Integrations
+- `POSTIZ_YOUTUBE_INTEGRATION_ID` — From Postiz Settings → Integrations
 
 ## Tech Stack
 
@@ -64,6 +68,55 @@ Required:
 - **httpx** — async HTTP client for Postiz
 - **Docker** — deployed on Coolify VPS
 
+## Deployment (Coolify)
+
+Deployed at: `http://acc4cwgow4ok4ko004ocsow8.107.174.108.62.sslip.io`
+
+Deployed via:
+- **Build pack**: Dockerfile
+- **Branch**: `main` of `https://github.com/nimhlan-netizen/social-media-app`
+- **Persistent storage**: volume `pipeline_data` → `/data`
+- **File mount**: `service_account.json` content → `/app/service_account.json`
+- **Port**: 8000
+
+To redeploy after a code push: go to Coolify → app → click **Redeploy**.
+
+## Postiz API Integration
+
+This app uses Postiz's self-hosted Public API. All endpoints require:
+- Header: `Authorization: <api-key>` (no `Bearer` prefix)
+- Base URL: `https://postiz.almostrolledit.com`
+
+### Endpoints Used
+
+| Step | Method | Endpoint |
+|---|---|---|
+| Upload video | POST | `/api/public/v1/upload` — multipart `file` field |
+| Find next slot | GET | `/api/public/v1/find-slot/?integrationId=<id>` |
+| Schedule post | POST | `/api/public/v1/posts` |
+
+### Post Payload Structure
+
+```json
+{
+  "type": "schedule",
+  "date": "<ISO datetime from find-slot>",
+  "shortLink": false,
+  "tags": [],
+  "posts": [
+    {
+      "integration": { "id": "<integrationId>" },
+      "value": [
+        {
+          "content": "<caption + hashtags>",
+          "image": [{ "id": "<media-id>", "path": "<media-url>" }]
+        }
+      ]
+    }
+  ]
+}
+```
+
 ## Data Flow Details
 
 ### VideoJob Statuses
@@ -74,23 +127,46 @@ Required:
 2. Burn in `.srt` subtitles (white text, black outline, bottom-center)
 3. Overlay hook text for first 3 seconds (top-center, large bold)
 4. Re-encode: H.264 video, AAC audio, CRF 23, 9:16 aspect preserved
-5. Output ~15MB max for Instagram compatibility
+5. Output ~95MB max for Instagram compatibility
 
-### Postiz Integration
-- Upload video to Postiz media endpoint first
-- Create a single post targeting all 3 platforms simultaneously
-- Caption = Gemini `suggested_caption` + `\n\n` + `hashtags`
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Liveness check |
+| GET | `/jobs` | List all video jobs with status |
+| GET | `/jobs/{id}` | Get single job details |
+| POST | `/jobs/{id}/retry` | Retry a failed job |
+| POST | `/trigger` | Manually trigger a Drive scan |
+
+### Quick Test Commands
+
+```powershell
+# Health check
+Invoke-WebRequest "http://acc4cwgow4ok4ko004ocsow8.107.174.108.62.sslip.io/health"
+
+# Trigger a manual scan
+Invoke-WebRequest -Method POST "http://acc4cwgow4ok4ko004ocsow8.107.174.108.62.sslip.io/trigger"
+
+# Watch job status
+Invoke-WebRequest "http://acc4cwgow4ok4ko004ocsow8.107.174.108.62.sslip.io/jobs"
+
+# Retry a failed job (replace 4 with the actual job ID)
+Invoke-WebRequest -Method POST "http://acc4cwgow4ok4ko004ocsow8.107.174.108.62.sslip.io/jobs/4/retry"
+```
 
 ## Development Notes
 
 - FFmpeg must be installed in the container (`apt-get install ffmpeg`)
-- Service account must be shared on the watched Drive folder
+- Service account must be shared on the watched Drive folder with Viewer access
+- Service account email: `gravity-claw-bot@gen-lang-client-0171666535.iam.gserviceaccount.com`
 - All temp files written to `DATA_DIR` (default: `/data` in Docker, `./data` locally)
-- The `/trigger` endpoint is useful for manual testing without waiting for the poll interval
+- The `/trigger` endpoint is useful for manual testing without waiting 60s
 - Failed jobs can be retried via `POST /jobs/{job_id}/retry`
+- The `googleapiclient.discovery_cache` warning about `file_cache` is harmless — ignore it
 
 ## Adding New Features
 
-- **New platform**: Add a new method to `postiz_client.py` and call it from `pipeline.py`
+- **New platform**: Add a new `POSTIZ_*_INTEGRATION_ID` env var, include it in `_get_integration_ids()` in `postiz_client.py`
 - **New overlay type**: Add to `editor.py` FFmpeg filter chain
 - **New analysis field**: Add to `AnalysisResult` in `analyzer.py`, update the Gemini prompt
